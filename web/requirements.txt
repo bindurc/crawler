@@ -1,0 +1,12 @@
+fastapi
+openai
+pinecone
+crawl4ai
+platwright #if didn't work use "pip playwright install"
+dotenv
+langchain-pinecone
+langchain-openai
+pydantic
+os
+asyncio
+uvicorn
