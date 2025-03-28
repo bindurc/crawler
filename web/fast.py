@@ -1,6 +1,6 @@
-
 import os
 import asyncio
+import openai
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl, Field
 from dotenv import load_dotenv
@@ -9,11 +9,10 @@ from crawl4ai.deep_crawling import BestFirstCrawlingStrategy
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from playwright.async_api import async_playwright
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
+from langchain_pinecone import PineconeVectorStore
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
-
 
 load_dotenv()
 
@@ -21,13 +20,15 @@ app = FastAPI()
 
 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# OpenAI API Key
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
 # Pinecone Setup
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-INDEX_NAME = "index-name"
+INDEX_NAME = "test"
 DIMENSION = 3072  
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
-
 if INDEX_NAME not in pc.list_indexes().names():
     pc.create_index(
         name=INDEX_NAME,
@@ -37,17 +38,14 @@ if INDEX_NAME not in pc.list_indexes().names():
     )
 
 index = pc.Index(INDEX_NAME)
-vector_store = PineconeVectorStore(index=index, embedding=OpenAIEmbeddings(model="text-embedding-3-large"))
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-large") 
+vector_store = PineconeVectorStore(index=index, embedding=embedding_model)
 
 # Pydantic Models
 class CrawlRequest(BaseModel):
     url: HttpUrl
     method: str
-    depth: int = Field(..., ge=0, le=2) 
-
-class QueryRequest(BaseModel):
-    question: str
-
+    depth: int = Field(..., ge=0, le=2)
 
 # Best-First Recursive Crawling
 async def fetch_rendered_html(url: str) -> str:
@@ -88,7 +86,7 @@ def store_embeddings(crawled_data):
         documents = [Document(page_content=chunk) for chunk in chunks]
         vector_store.add_documents(documents)
 
-# Query GPT-4o
+# Query GPT-4o using OpenAI
 def query_gpt4o(user_query: str):
     retriever = vector_store.as_retriever()
     relevant_chunks = retriever.get_relevant_documents(user_query)
@@ -100,9 +98,12 @@ def query_gpt4o(user_query: str):
     Given this information, provide a concise and clear response to the following query:
     {user_query}
     """
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
-    response = llm.invoke(prompt)
-    return response.content
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a helpful assistant."},
+                  {"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
 
 # API Endpoint to Start Crawling
 @app.post("/crawl/")
@@ -131,13 +132,11 @@ def start_crawling(request: CrawlRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# API Endpoint to Query Data
-@app.post("/query/")
-def query_pinecone(request: QueryRequest):
+# API Endpoint to Query Data (GET Request)
+@app.get("/query/")
+def query_pinecone(question: str):
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        answer = loop.run_until_complete(asyncio.to_thread(query_gpt4o, request.question))
+        answer = query_gpt4o(question)
         return {"answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
