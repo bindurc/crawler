@@ -12,7 +12,10 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from langchain_core.documents import Document
+
 
 load_dotenv()
 
@@ -89,21 +92,32 @@ def store_embeddings(crawled_data):
 # Query GPT-4o using OpenAI
 def query_gpt4o(user_query: str):
     retriever = vector_store.as_retriever()
-    relevant_chunks = retriever.get_relevant_documents(user_query)
-    context = "\n\n".join([chunk.page_content for chunk in relevant_chunks])
+    
+    relevant_chunks = retriever.invoke(user_query)
+
+    context = "".join([chunk.page_content for chunk in relevant_chunks])
+
     prompt = f"""
+    Extract key insights from the given context and provide a **well-structured** response in plain text format. 
+    - Do **NOT** use any special formatting like **bold**, lists, or newlines.
+
     The following context is extracted from a website:
     {context}
-    
-    Given this information, provide a concise and clear response to the following query:
+
+    Given this information, provide a well-formatted response to the following query:
     {user_query}
     """
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "system", "content": "You are a helpful assistant."},
-                  {"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
+
+    chat_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+
+    messages = [
+        SystemMessage(content="You are a helpful assistant."),
+        HumanMessage(content=prompt)
+    ]
+
+    response = chat_model.invoke(messages)
+
+    return response.content
 
 # API Endpoint to Start Crawling
 @app.post("/crawl/")
